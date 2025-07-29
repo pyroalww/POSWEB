@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Gelişmiş POS Terminali</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --pos-green: #28a745;
+            --pos-red: #dc3545;
+            --pos-blue: #007aff;
+            --pos-orange: #ff9500;
+            --bg-dark: #121212;
+            --bg-surface: #1e1e1e;
+            --key-dark: #3a3a3c;
+            --key-light: #a0a0a0;
+            --text-primary: #ffffff;
+            --text-secondary: #8e8e93;
+        }
+
+        /* --- Temel ve Yerleşim --- */
+        html, body {
+            overscroll-behavior: none;
+            height: 100%;
+            overflow: hidden;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        }
+        .pos-container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background-color: black;
+            box-shadow: 0 0 80px rgba(0,0,0,0.6);
+        }
+
+        /* --- Mikro Etkileşimler ve Geri Bildirim --- */
+        * { -webkit-tap-highlight-color: transparent; }
+        .press-active:active {
+            transition: transform 0.05s ease-out, filter 0.05s ease-out;
+            transform: scale(0.96);
+        }
+        .key:active { filter: brightness(1.3); }
+        .bg-pos-green:active { filter: brightness(1.2); }
+        .list-item:active { background-color: rgba(255, 255, 255, 0.1); }
+        .quick-sale-btn:active, #show-keypad-btn:active { transform: scale(0.95); }
+
+
+        /* --- Ekran Geçişleri ve Animasyonlar --- */
+        .view {
+            position: absolute;
+            inset: 0;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+            will-change: transform, opacity;
+            z-index: 10;
+        }
+        .view.hidden {
+            transform: scale(0.95);
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .overlay-screen {
+            z-index: 50;
+            background-color: rgba(18, 18, 18, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            opacity: 0;
+            transform: translateY(100%);
+            pointer-events: none;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease;
+        }
+        .overlay-screen.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        /* --- Ödeme Akışı Animasyonları --- */
+        @keyframes spinner-rotate { to { transform: rotate(360deg); } }
+        .spinner {
+            animation: spinner-rotate 0.8s linear infinite;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: var(--text-primary);
+        }
+        
+        @keyframes pop-in {
+            0% { opacity: 0; transform: scale(0.7); }
+            80% { opacity: 1; transform: scale(1.1); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        .status-icon-animation { animation: pop-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        
+        @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in-up { animation: fade-in-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        
+        @keyframes tap-card { 0%, 100% { transform: translateY(0) rotate(-5deg); } 50% { transform: translateY(-20px) rotate(0deg); } }
+        .card-tap-animation { animation: tap-card 1.5s infinite cubic-bezier(0.45, 0, 0.55, 1); }
+        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.3; transform: scale(1.1); } }
+        .nfc-pulse { animation: pulse 2s infinite ease-in-out; }
+
+        /* --- Özel Arayüz Elemanları --- */
+        .pin-dots span {
+            width: 1rem; height: 1rem;
+            background-color: var(--key-dark);
+            border-radius: 50%;
+            display: inline-block;
+            transition: all 0.2s ease;
+        }
+        .pin-dots span.active { background-color: var(--text-primary); transform: scale(1.1); }
+    </style>
+</head>
+<body class="flex items-center justify-center">
+
+    <div class="pos-container w-full max-w-md flex flex-col overflow-hidden relative">
+        
+        <!-- Durum Çubuğu (Tüm ekranlarda sabit) -->
+        <div class="px-4 pt-3 flex justify-between items-center text-white text-sm font-medium z-20">
+            <div id="time" class="font-mono"></div>
+            <div class="flex items-center space-x-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M17.778 8.222c-4.296-4.296-11.26-4.296-15.556 0A1 1 0 01.808 6.808c5.076-5.077 13.308-5.077 18.384 0a1 1 0 01-1.414 1.414zM16.364 9.636c-3.536-3.536-9.26-3.536-12.728 0a1 1 0 01-1.414-1.414c4.314-4.314 11.31-4.314 15.556 0a1 1 0 11-1.414 1.414z" clip-rule="evenodd" /><path d="M14.242 11.758a1 1 0 01-1.414 0c-2.402-2.402-6.28-2.402-8.682 0a1 1 0 11-1.414-1.414c3.18-3.18 8.322-3.18 11.502 0a1 1 0 010 1.414zM12 14a1 1 0 11-2 0 1 1 0 012 0z" /></svg>
+                <div class="flex items-center">
+                    <span>100%</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 20h6a2 2 0 002-2V6a2 2 0 00-2-2H9a2 2 0 00-2 2v12a2 2 0 002 2z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.5 9.5h-1.5" transform="rotate(90 18 10)" /></svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ana Ekran ve Tuş Takımı Konteyneri -->
+        <div id="main-content" class="flex-grow flex flex-col relative">
+            <!-- Ana Ekran Görünümü -->
+            <div id="home-view" class="view flex flex-col justify-between p-6">
+                <div class="text-center pt-16">
+                    <h1 class="text-4xl font-bold">Kahve Dükkanı</h1>
+                    <p class="text-lg text-text-secondary mt-1">POS Terminali v2.0</p>
+                </div>
+                <div class="w-full">
+                    <p class="text-sm font-medium text-text-secondary mb-3 text-center">HIZLI SATIŞ</p>
+                    <div class="grid grid-cols-3 gap-3 mb-6">
+                        <button data-amount="25" class="quick-sale-btn press-active h-20 bg-key-dark rounded-xl text-2xl font-semibold">₺25</button>
+                        <button data-amount="50" class="quick-sale-btn press-active h-20 bg-key-dark rounded-xl text-2xl font-semibold">₺50</button>
+                        <button data-amount="100" class="quick-sale-btn press-active h-20 bg-key-dark rounded-xl text-2xl font-semibold">₺100</button>
+                    </div>
+                    <button id="show-keypad-btn" class="press-active w-full h-20 bg-pos-blue rounded-2xl text-3xl font-bold">Tutar Gir</button>
+                </div>
+            </div>
+
+            <!-- Tutar Girme / Tuş Takımı Görünümü -->
+            <div id="keypad-view" class="view hidden flex flex-col">
+                <div class="text-right px-6 pb-4 flex-grow flex flex-col justify-end">
+                    <div id="display" class="text-text-primary text-8xl font-thin break-words select-none" style="min-height: 100px;"></div>
+                </div>
+                <div id="main-keypad" class="grid grid-cols-4 gap-3 p-4"></div>
+            </div>
+        </div>
+
+        <!-- === ÖDEME AKIŞI EKRANLARI (OVERLAYS) === -->
+        <div id="payment-method-screen" class="overlay-screen absolute inset-0 flex flex-col p-6"></div>
+        <div id="loading-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-8"></div>
+        <div id="qr-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-8 text-center"></div>
+        <div id="nfc-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-8 text-center"></div>
+        <div id="bank-screen" class="overlay-screen absolute inset-0 flex flex-col p-4"></div>
+        <div id="installment-screen" class="overlay-screen absolute inset-0 flex flex-col p-4"></div>
+        <div id="pin-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-4"></div>
+        <div id="result-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-8 text-center"></div>
+        <div id="receipt-screen" class="overlay-screen absolute inset-0 flex flex-col items-center justify-center p-8 text-center"></div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // --- Durum ve Yapılandırma ---
+    let currentInput = '0';
+    let pinInput = '';
+    let activeOverlay = null;
+    let paymentFlowState = {};
+    const MAX_INPUT_LENGTH = 7;
+    const MAX_PIN_LENGTH = 4;
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const trLocale = 'tr-TR';
+
+    // --- DOM Elemanları ---
+    const DOMElements = {
+        body: document.body,
+        time: document.getElementById('time'),
+        homeView: document.getElementById('home-view'),
+        keypadView: document.getElementById('keypad-view'),
+        display: document.getElementById('display'),
+        mainKeypad: document.getElementById('main-keypad'),
+        showKeypadBtn: document.getElementById('show-keypad-btn'),
+        paymentMethodScreen: document.getElementById('payment-method-screen'),
+        loadingScreen: document.getElementById('loading-screen'),
+        qrScreen: document.getElementById('qr-screen'),
+        nfcScreen: document.getElementById('nfc-screen'),
+        bankScreen: document.getElementById('bank-screen'),
+        installmentScreen: document.getElementById('installment-screen'),
+        pinScreen: document.getElementById('pin-screen'),
+        resultScreen: document.getElementById('result-screen'),
+        receiptScreen: document.getElementById('receipt-screen'),
+    };
+
+    // --- Ses ve Dokunsal Geri Bildirim ---
+    const playSound = (type) => {
+        if (!audioCtx) return;
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        g.gain.setValueAtTime(0, audioCtx.currentTime);
+        const sounds = {
+            tap: { f: 800, g: 0.1, d: 0.05, t: 'triangle' },
+            tapLight: { f: 1200, g: 0.08, d: 0.04, t: 'triangle' },
+            success: { f: 700, g: 0.3, d: 0.2, t: 'sine' },
+            finalSuccess: { f: 900, g: 0.4, d: 0.3, t: 'sine' },
+            error: { f: 200, g: 0.3, d: 0.2, t: 'sine' },
+            cancel: { f: 400, g: 0.2, d: 0.1, t: 'sine' },
+        };
+        const s = sounds[type];
+        o.type = s.t; o.frequency.setValueAtTime(s.f, audioCtx.currentTime);
+        g.gain.linearRampToValueAtTime(s.g, audioCtx.currentTime + 0.01);
+        g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + s.d);
+        o.start(); o.stop(audioCtx.currentTime + s.d);
+    };
+    const doHapticFeedback = (intensity = 'light') => {
+        if (navigator.vibrate) {
+            const vibrations = { light: 10, medium: 30, heavy: 50 };
+            navigator.vibrate(vibrations[intensity]);
+        }
+    };
+
+    // --- Ana Tuş Takımı Oluşturma ---
+    const mainKeys = [
+        '1', '2', '3', '⌫', '4', '5', '6', 'C', '7', '8', '9', 'Öde', '00', '0', '.'
+    ];
+    mainKeys.forEach(key => {
+        const button = document.createElement('button');
+        button.textContent = key;
+        button.dataset.key = key;
+        let classes = 'key press-active rounded-2xl text-3xl font-medium flex justify-center items-center h-20 ';
+        switch(key) {
+            case '⌫': classes += 'bg-key-dark text-pos-orange'; button.dataset.action = 'backspace'; break;
+            case 'C': classes += 'bg-key-dark text-pos-red'; button.dataset.action = 'clear'; break;
+            case 'Öde': classes += 'bg-pos-green col-span-2 text-white font-bold'; button.dataset.action = 'charge'; break;
+            default: classes += 'bg-key-dark text-white'; button.dataset.action = 'input';
+        }
+        button.className = classes;
+        DOMElements.mainKeypad.appendChild(button);
+    });
+
+    // --- Ekran ve Akış Yönetimi ---
+    const switchView = (viewToShow) => {
+        if (viewToShow === 'keypad') {
+            DOMElements.homeView.classList.add('hidden');
+            DOMElements.keypadView.classList.remove('hidden');
+        } else {
+            DOMElements.keypadView.classList.add('hidden');
+            DOMElements.homeView.classList.remove('hidden');
+        }
+    };
+
+    const showOverlay = (screenId) => {
+        if (activeOverlay) closeOverlay(activeOverlay);
+        const targetScreen = DOMElements[screenId];
+        targetScreen.classList.add('visible');
+        activeOverlay = screenId;
+    };
+    const closeOverlay = (screenId) => {
+        DOMElements[screenId].classList.remove('visible');
+        if (activeOverlay === screenId) activeOverlay = null;
+    };
+    const closeAllOverlays = () => {
+        document.querySelectorAll('.overlay-screen.visible').forEach(s => s.classList.remove('visible'));
+        activeOverlay = null;
+    };
+    
+    const startPaymentFlow = (amount) => {
+        const numericAmount = parseFloat(String(amount).replace(',', '.'));
+        if (isNaN(numericAmount) || numericAmount <= 0) {
+            playSound('error'); return;
+        }
+        paymentFlowState = {
+            amount: numericAmount,
+            formattedAmount: formatCurrency(numericAmount),
+            date: new Date(),
+        };
+        renderPaymentMethodScreen();
+        showOverlay('paymentMethodScreen');
+    };
+    const cancelPaymentFlow = () => {
+        playSound('cancel'); doHapticFeedback('medium');
+        closeAllOverlays();
+        paymentFlowState = {}; pinInput = '';
+    };
+
+    // --- Ekranları Oluşturma Fonksiyonları ---
+    const renderPaymentMethodScreen = () => {
+        DOMElements.paymentMethodScreen.innerHTML = `
+            <div class="text-center pt-8">
+                <p class="text-text-secondary">Ödenecek Tutar</p>
+                <h1 class="text-6xl font-bold my-4">${paymentFlowState.formattedAmount}</h1>
+            </div>
+            <div class="flex-grow flex flex-col justify-center space-y-4">
+                <button id="pay-by-card" class="list-item press-active w-full p-6 bg-surface rounded-2xl text-2xl font-semibold text-left flex items-center">
+                    <svg class="w-8 h-8 mr-4" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V8a2 2 0 00-2-2H4zm0 2h12v1H4V6z" /></svg>
+                    Kart ile Öde
+                </button>
+                <button id="pay-by-qr" class="list-item press-active w-full p-6 bg-surface rounded-2xl text-2xl font-semibold text-left flex items-center">
+                    <svg class="w-8 h-8 mr-4" fill="currentColor" viewBox="0 0 20 20"><path d="M3 3h4v4H3V3zm5 0h4v4H8V3zM3 8h4v4H3V8zm5 5h4v4H8v-4zM8 8h4v4H8V8zm5-5h4v4h-4V3zm0 5h4v4h-4V8z" /></svg>
+                    QR Kod ile Öde
+                </button>
+            </div>
+            <div class="p-4"><button onclick="window.cancelPaymentFlow()" class="w-full text-lg text-pos-blue font-semibold">İptal</button></div>`;
+        
+        document.getElementById('pay-by-card').onclick = () => {
+            paymentFlowState.method = 'Kart';
+            renderNfcScreen();
+            showOverlay('nfcScreen');
+        };
+        document.getElementById('pay-by-qr').onclick = () => {
+            paymentFlowState.method = 'QR Kod';
+            renderQrScreen();
+            showOverlay('qrScreen');
+        };
+    };
+
+    const renderQrScreen = () => {
+        DOMElements.qrScreen.innerHTML = `
+            <p class="text-5xl font-bold mb-4">${paymentFlowState.formattedAmount}</p>
+            <p class="text-2xl text-text-secondary font-medium mb-8">Lütfen QR Kodu okutun</p>
+            <div class="p-4 bg-white rounded-2xl">
+                <svg width="220" height="220" viewBox="0 0 37 37" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M0 0h11v11H0V0ZM4 4h3v3H4V4Z" fill="black"/><path fill-rule="evenodd" clip-rule="evenodd" d="M26 0h11v11H26V0ZM30 4h3v3h-3V4Z" fill="black"/><path fill-rule="evenodd" clip-rule="evenodd" d="M0 26h11v11H0V26ZM4 30h3v3H4v-3Z" fill="black"/><path d="M15 4h1v1h-1V4ZM18 4h1v1h-1V4ZM21 4h1v1h-1V4ZM24 4h1v1h-1V4ZM14 7h1v1h-1V7ZM17 7h1v1h-1V7ZM20 7h1v1h-1V7ZM23 7h1v1h-1V7ZM26 7h1v1h-1V7ZM29 7h1v1h-1V7ZM32 7h1v1h-1V7ZM15 10h1v1h-1v-1ZM18 10h1v1h-1v-1ZM21 10h1v1h-1v-1ZM24 10h1v1h-1v-1ZM13 13h1v1h-1v-1ZM16 13h1v1h-1v-1ZM19 13h1v1h-1v-1ZM22 13h1v1h-1v-1ZM25 13h1v1h-1v-1ZM28 13h1v1h-1v-1ZM31 13h1v1h-1v-1ZM34 13h1v1h-1v-1ZM4 15h1v1H4v-1ZM7 15h1v1H7v-1ZM10 15h1v1h-1v-1ZM15 16h1v1h-1v-1ZM18 16h1v1h-1v-1ZM21 16h1v1h-1v-1ZM24 16h1v1h-1v-1ZM27 16h1v1h-1v-1ZM30 16h1v1h-1v-1ZM33 16h1v1h-1v-1ZM4 18h1v1H4v-1ZM7 18h1v1H7v-1ZM10 18h1v1h-1v-1ZM13 19h1v1h-1v-1ZM16 19h1v1h-1v-1ZM19 19h1v1h-1v-1ZM22 19h1v1h-1v-1ZM25 19h1v1h-1v-1ZM28 19h1v1h-1v-1ZM31 19h1v1h-1v-1ZM34 19h1v1h-1v-1ZM4 21h1v1H4v-1ZM7 21h1v1H7v-1ZM10 21h1v1h-1v-1ZM15 22h1v1h-1v-1ZM18 22h1v1h-1v-1ZM21 22h1v1h-1v-1ZM24 22h1v1h-1v-1ZM27 22h1v1h-1v-1ZM30 22h1v1h-1v-1ZM33 22h1v1h-1v-1ZM4 24h1v1H4v-1ZM7 24h1v1H7v-1ZM10 24h1v1h-1v-1ZM13 25h1v1h-1v-1ZM16 25h1v1h-1v-1ZM19 25h1v1h-1v-1ZM22 25h1v1h-1v-1ZM25 25h1v1h-1v-1ZM28 25h1v1h-1v-1ZM31 25h1v1h-1v-1ZM34 25h1v1h-1v-1ZM15 28h1v1h-1v-1ZM18 28h1v1h-1v-1ZM21 28h1v1h-1v-1ZM24 28h1v1h-1v-1ZM27 28h1v1h-1v-1ZM30 28h1v1h-1v-1ZM33 28h1v1h-1v-1ZM13 31h1v1h-1v-1ZM16 31h1v1h-1v-1ZM19 31h1v1h-1v-1ZM22 31h1v1h-1v-1ZM25 31h1v1h-1v-1ZM28 31h1v1h-1v-1ZM31 31h1v1h-1v-1ZM34 31h1v1h-1v-1ZM15 34h1v1h-1v-1ZM18 34h1v1h-1v-1ZM21 34h1v1h-1v-1Z" fill="black"/></svg>
+            </div>
+            <div id="qr-status" class="mt-8 flex items-center">
+                <div class="spinner w-6 h-6 rounded-full mr-3"></div>
+                <span class="text-xl text-text-secondary">Ödeme bekleniyor...</span>
+            </div>
+            <button onclick="window.cancelPaymentFlow()" class="absolute bottom-8 text-lg text-pos-blue font-semibold">İptal</button>`;
+        
+        setTimeout(() => {
+            if (activeOverlay !== 'qrScreen') return;
+            const isSuccess = Math.random() > 0.1; // 90% success for QR
+            if (isSuccess) {
+                paymentFlowState.bank = "Mobil Bankacılık";
+                paymentFlowState.cardType = 'QR';
+                paymentFlowState.installments = "Tek Çekim";
+                finalizeTransaction(true);
+            } else {
+                finalizeTransaction(false);
+            }
+        }, 5000 + Math.random() * 2000);
+    };
+    
+    const renderNfcScreen = () => {
+        DOMElements.nfcScreen.innerHTML = `
+            <p class="text-5xl font-bold mb-4">${paymentFlowState.formattedAmount}</p>
+            <p class="text-2xl text-text-secondary font-medium mb-12">Kartınızı Okutun, Takın veya Geçirin</p>
+            <div class="relative w-64 h-64 flex items-center justify-center">
+                 <svg class="w-24 h-24 text-gray-400 nfc-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                 <div class="absolute -top-8 -right-8 card-tap-animation">
+                     <svg class="w-24 h-24 text-white -rotate-[5deg]" viewBox="0 0 320 192" fill="none"><rect width="320" height="192" rx="16" fill="currentColor"/><rect x="24" y="128" width="80" height="12" rx="6" fill="#A0A0A0"/><rect x="24" y="32" width="48" height="32" rx="4" fill="#FFD600"/></svg>
+                 </div>
+            </div>
+            <button onclick="window.cancelPaymentFlow()" class="absolute bottom-8 text-lg text-pos-blue font-semibold">İptal</button>`;
+        setTimeout(() => {
+            if (activeOverlay !== 'nfcScreen') return;
+            playSound('tap'); doHapticFeedback('medium');
+            renderLoadingScreen('İşleniyor...'); showOverlay('loadingScreen');
+            setTimeout(() => { renderBankSelectionScreen(); showOverlay('bankScreen'); }, 1500);
+        }, 2500);
+    };
+
+    const renderBankSelectionScreen = () => {
+        const banks = ['Ziraat Bankası', 'Garanti BBVA', 'İş Bankası', 'Yapı Kredi', 'Akbank', 'VakıfBank', 'Halkbank', 'DenizBank'];
+        DOMElements.bankScreen.innerHTML = `
+            <h1 class="text-3xl font-bold text-white mb-6 text-center pt-8">Banka Seçin</h1>
+            <div id="bank-list" class="flex-grow overflow-y-auto space-y-2 px-4"></div>
+            <div class="p-4"><button onclick="window.cancelPaymentFlow()" class="w-full text-lg text-pos-blue font-semibold">İptal</button></div>`;
+        
+        const list = document.getElementById('bank-list');
+        banks.forEach(bank => {
+            const item = document.createElement('button');
+            item.className = 'list-item press-active w-full text-left p-4 bg-surface rounded-lg text-lg text-white transition-colors';
+            item.textContent = bank;
+            item.onclick = () => {
+                paymentFlowState.bank = bank;
+                playSound('tapLight'); doHapticFeedback();
+                renderInstallmentScreen(); showOverlay('installmentScreen');
+            };
+            list.appendChild(item);
+        });
+    };
+    
+    const renderInstallmentScreen = () => {
+        const options = ['Tek Çekim', '2 Taksit', '3 Taksit', '6 Taksit', '9 Taksit', '12 Taksit'];
+        DOMElements.installmentScreen.innerHTML = `
+            <h1 class="text-3xl font-bold text-white mb-6 text-center pt-8">Taksit Seçenekleri</h1>
+            <div id="installment-list" class="flex-grow overflow-y-auto space-y-2 px-4"></div>
+            <div class="p-4"><button onclick="window.cancelPaymentFlow()" class="w-full text-lg text-pos-blue font-semibold">İptal</button></div>`;
+        const list = document.getElementById('installment-list');
+        options.forEach(opt => {
+            const item = document.createElement('button');
+            item.className = 'list-item press-active w-full text-left p-4 bg-surface rounded-lg text-lg text-white transition-colors';
+            item.textContent = opt;
+            item.onclick = () => {
+                paymentFlowState.installments = opt;
+                playSound('tapLight'); doHapticFeedback();
+                renderPinScreen(); showOverlay('pinScreen');
+            };
+            list.appendChild(item);
+        });
+    };
+
+    const renderPinScreen = () => {
+        pinInput = '';
+        DOMElements.pinScreen.innerHTML = `
+            <div class="flex-grow flex flex-col items-center justify-center">
+                <h1 class="text-2xl font-semibold text-white mb-4">Kart Şifrenizi Girin</h1>
+                <div id="pin-dots" class="flex space-x-4 my-6">${Array(MAX_PIN_LENGTH).fill('<span></span>').join('')}</div>
+            </div>
+            <div id="pin-keypad" class="grid grid-cols-3 gap-3 p-4 w-full max-w-sm"></div>`;
+        const pinKeypad = document.getElementById('pin-keypad');
+        ['1','2','3','4','5','6','7','8','9','İptal','0','⌫'].forEach(key => {
+            const btn = document.createElement('button');
+            btn.className = 'key press-active rounded-full text-3xl font-medium flex justify-center items-center bg-transparent text-white h-20';
+            btn.textContent = key;
+            if (key === 'İptal') { btn.className += ' text-base text-pos-blue font-semibold'; btn.onclick = cancelPaymentFlow; } 
+            else { btn.dataset.key = key; btn.onclick = handlePinInput; }
+            pinKeypad.appendChild(btn);
+        });
+    };
+    
+    const handlePinInput = (e) => {
+        const key = e.target.dataset.key;
+        playSound('tapLight'); doHapticFeedback();
+        if (key === '⌫') pinInput = pinInput.slice(0, -1);
+        else if (pinInput.length < MAX_PIN_LENGTH) pinInput += key;
+        document.querySelectorAll('#pin-dots span').forEach((d, i) => d.classList.toggle('active', i < pinInput.length));
+        if (pinInput.length === MAX_PIN_LENGTH) authorizePayment();
+    };
+
+    const authorizePayment = () => {
+        renderLoadingScreen('Yetkilendiriliyor...');
+        showOverlay('loadingScreen');
+        setTimeout(() => {
+            const isSuccess = Math.random() > 0.15; // 85% success for PIN
+            paymentFlowState.cardType = Math.random() > 0.5 ? 'Mastercard' : 'Visa';
+            finalizeTransaction(isSuccess);
+        }, 2000);
+    };
+
+    const finalizeTransaction = (isSuccess) => {
+        renderLoadingScreen(isSuccess ? 'Onaylandı' : 'Reddedildi');
+        showOverlay('loadingScreen');
+        setTimeout(() => {
+            renderResultScreen(isSuccess);
+            showOverlay('resultScreen');
+        }, 1000);
+    };
+
+    const renderResultScreen = (isSuccess) => {
+        const successIcon = `<svg class="h-full w-full text-pos-green" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+        const errorIcon = `<svg class="h-full w-full text-pos-red" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>`;
+        
+        DOMElements.resultScreen.innerHTML = `
+            <div class="h-28 w-28 mb-6 status-icon-animation">${isSuccess ? successIcon : errorIcon}</div>
+            <h2 class="text-4xl font-bold mb-2 fade-in-up">${isSuccess ? 'Onaylandı' : 'Reddedildi'}</h2>
+            <p class="text-lg text-text-secondary fade-in-up" style="animation-delay: 0.2s;">${isSuccess ? 'Ödeme başarıyla alındı.' : 'Lütfen başka bir kart deneyin.'}</p>
+            ${isSuccess ? `
+            <div class="text-left bg-surface rounded-lg p-4 mt-8 w-full max-w-xs fade-in-up" style="animation-delay: 0.4s;">
+                <div class="flex justify-between"><span class="text-text-secondary">Tutar:</span><span>${paymentFlowState.formattedAmount}</span></div>
+                <div class="flex justify-between"><span class="text-text-secondary">Banka:</span><span>${paymentFlowState.bank}</span></div>
+                <div class="flex justify-between"><span class="text-text-secondary">Kart:</span><span>**** **** **** ${Math.floor(1000 + Math.random() * 9000)} (${paymentFlowState.cardType})</span></div>
+                <div class="flex justify-between"><span class="text-text-secondary">İşlem ID:</span><span>${(Math.random() + 1).toString(36).substring(2, 10).toUpperCase()}</span></div>
+            </div>` : ''}
+        `;
+        playSound(isSuccess ? 'finalSuccess' : 'error');
+        doHapticFeedback('heavy');
+
+        setTimeout(() => {
+            if (isSuccess) {
+                renderReceiptScreen(); showOverlay('receiptScreen');
+            } else {
+                cancelPaymentFlow();
+                switchView('keypad');
+            }
+        }, isSuccess ? 3000 : 2500);
+    };
+
+    const renderReceiptScreen = () => {
+        DOMElements.receiptScreen.innerHTML = `
+            <h2 class="text-3xl font-bold mb-12">Fiş ister misiniz?</h2>
+            <div class="w-full max-w-xs space-y-4">
+                 <button id="print-receipt" class="list-item press-active w-full p-5 bg-surface rounded-xl text-xl font-semibold">Fiş Yazdır</button>
+                 <button id="sms-receipt" class="list-item press-active w-full p-5 bg-surface rounded-xl text-xl font-semibold">SMS Gönder</button>
+                 <button id="no-receipt" class="mt-8 text-text-secondary">Fiş İstemiyorum</button>
+            </div>
+        `;
+        const reset = () => {
+            playSound('tapLight');
+            cancelPaymentFlow();
+            currentInput = '0'; updateDisplay(); switchView('home');
+        };
+        document.getElementById('print-receipt').onclick = () => {
+            renderLoadingScreen('Fiş yazdırılıyor...'); showOverlay('loadingScreen');
+            setTimeout(reset, 1500);
+        };
+        document.getElementById('sms-receipt').onclick = () => {
+            renderLoadingScreen('SMS gönderiliyor...'); showOverlay('loadingScreen');
+            setTimeout(reset, 1500);
+        };
+        document.getElementById('no-receipt').onclick = reset;
+    };
+
+    const renderLoadingScreen = (text) => {
+        DOMElements.loadingScreen.innerHTML = `
+            <div class="spinner w-16 h-16 rounded-full"></div>
+            <p class="mt-6 text-xl text-text-secondary">${text}</p>`;
+    };
+    
+    // --- Giriş ve Görüntüleme Mantığı ---
+    const formatCurrency = (value) => new Intl.NumberFormat(trLocale, { style: 'currency', currency: 'TRY' }).format(value);
+    
+    const updateDisplay = () => {
+        const value = parseFloat(currentInput.replace(',', '.'));
+        if (isNaN(value) || value === 0) {
+            DOMElements.display.textContent = '';
+            return;
+        }
+        DOMElements.display.textContent = formatCurrency(value);
+
+        const len = DOMElements.display.textContent.length;
+        DOMElements.display.className = 'text-text-primary font-thin break-words select-none ' + 
+            (len > 12 ? 'text-6xl' : len > 9 ? 'text-7xl' : 'text-8xl');
+    };
+
+    const handleKeyInput = (key, action) => {
+        doHapticFeedback(); playSound('tap');
+        
+        if (action === 'input') {
+            if (key === '.' && currentInput.includes(',')) return;
+            if (currentInput.replace(/[.,]/g, '').length >= MAX_INPUT_LENGTH) return;
+            if (currentInput === '0') {
+                if(key === '.') { currentInput = '0,'; }
+                else { currentInput = key; }
+            } else {
+                 if (key === '.') currentInput += ',';
+                 else currentInput += key;
+            }
+        } else if (action === 'backspace') {
+            currentInput = currentInput.length > 1 ? currentInput.slice(0, -1) : '0';
+        } else if (action === 'clear') {
+            if (currentInput === '0') {
+                switchView('home');
+            } else {
+                currentInput = '0';
+            }
+        } else if (action === 'charge') {
+            startPaymentFlow(currentInput);
+        }
+        updateDisplay();
+    };
+
+    // --- Olay Dinleyicileri ---
+    DOMElements.showKeypadBtn.onclick = () => switchView('keypad');
+    document.querySelectorAll('.quick-sale-btn').forEach(btn => {
+        btn.onclick = () => startPaymentFlow(btn.dataset.amount);
+    });
+    
+    DOMElements.mainKeypad.addEventListener('click', e => {
+        const target = e.target.closest('.key');
+        if (target) handleKeyInput(target.dataset.key, target.dataset.action);
+    });
+    
+    // --- Başlatma ---
+    const init = () => {
+        window.cancelPaymentFlow = cancelPaymentFlow; // Make it globally accessible for inline onclicks
+        const updateClock = () => {
+            DOMElements.time.textContent = new Date().toLocaleTimeString(trLocale, { hour: '2-digit', minute: '2-digit' });
+        };
+        updateClock(); setInterval(updateClock, 30000);
+        switchView('home');
+        updateDisplay();
+    };
+
+    init();
+});
+</script>
+</body>
+</html>
